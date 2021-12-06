@@ -66,9 +66,9 @@ class ShardTool(object):
         recv_output = []
         for i in range(dist.get_world_size()):
             if i == dist.get_rank():
-                recv_output.append(0) # 实际上并不需要，仅占位用
+                recv_output.append(paddle.to_tensor([0], dtype="int32")) # 实际上并不需要，仅占位用
                 continue
-            tensor_type = paddle.zeros([0], dtype="int32")
+            tensor_type = paddle.to_tensor([0], dtype="int32")
             dist.recv(tensor_type, src=i)
             recv_output.append(tensor_type)
 
@@ -110,9 +110,9 @@ class ShardTool(object):
         recv_output = []
         for i in range(dist.get_world_size()):
             if i == dist.get_rank():
-                recv_output.append(0) # 实际上并不需要，仅占位用
+                recv_output.append(paddle.to_tensor([0], dtype="int32")) # 实际上并不需要，仅占位用
                 continue
-            tensor_type = paddle.zeros([0], dtype="int32")
+            tensor_type = paddle.to_tensor([0], dtype="int32")
             dist.recv(tensor_type, src=i)
             recv_output.append(tensor_type)
 
@@ -138,7 +138,7 @@ class ShardTool(object):
         recv_output = []
         for i in range(dist.get_world_size()):
             if i == dist.get_rank():
-                recv_output.append(0) # 实际上并不需要，仅占位用
+                recv_output.append(paddle.to_tensor([0], dtype="int32")) # 实际上并不需要，仅占位用
                 continue
             tensor_type = paddle.zeros([recv_meta[i], grad.shape[1]],
                 dtype=grad.dtype)
