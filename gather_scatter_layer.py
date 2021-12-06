@@ -14,4 +14,5 @@ class GatherScatter(PyLayer):
         
     @staticmethod
     def backward(ctx, dy):
-        pass
+        grad = self.shard_tool.backward_scatter(dy)
+        return grad
