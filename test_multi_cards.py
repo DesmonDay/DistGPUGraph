@@ -57,6 +57,7 @@ def main():
     shard_tool = ShardTool(node_info, forward_meta_info, backward_meta_info)
 
     # emb_size = 3
+    np.random.seed(dist.get_rank())
     data = paddle.to_tensor(np.random.randn(node_info["node_eidx"] - node_info["node_sidx"] + 1, 3))
     data.stop_gradient = False
     gather_scatter = GatherScatter()
