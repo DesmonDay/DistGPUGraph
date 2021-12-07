@@ -1,3 +1,6 @@
+import warnings
+warnings.filterwarnings('ignore')
+
 import numpy as np
 import paddle
 import paddle.distributed as dist
@@ -32,29 +35,35 @@ def main():
 
     if dist.get_world_size() > 1:
         dist.init_parallel_env()
+    
+    np.random.seed(5)
 
-    if dist.get_rank() == 0:
-        node_info = {"node_sidx": 0, "node_eidx": 9}
-        forward_meta_info = {1: paddle.to_tensor([4, 5, 7, 8, 9])}
-        backward_meta_info = {1: 4}
-        shard_tool = ShardTool(node_info, forward_meta_info, backward_meta_info)
-    elif dist.get_rank() == 1:
-        node_info = {"node_sidx": 10, "node_eidx": 20}
-        forward_meta_info = {0: paddle.to_tensor([11, 15, 16, 19])}
-        backward_meta_info = {0: 5}
-        shard_tool = ShardTool(node_info, forward_meta_info, backward_meta_info)
+    # Multi-cards examples
+    node_infos = [{"node_sidx": i * 10, "node_eidx": (i + 1) * 10 - 1} for i in range(dist.get_world_size())]
+    forward_meta_infos = [{} for i in range(dist.get_world_size())]
+    backward_meta_infos = [{} for i in range(dist.get_world_size())]
+    for i in range(dist.get_world_size()):
+        for j in range(dist.get_world_size()):
+            if j == i:
+                continue
+            forward_meta_infos[i][j] = paddle.to_tensor(
+                np.unique(np.random.randint(node_infos[i]["node_sidx"], node_infos[i]["node_eidx"] + 1, size=8)))
+            backward_meta_infos[j][i] = len(forward_meta_infos[i][j]) 
+    
+    proc_id = dist.get_rank()
+    node_info = node_infos[proc_id]
+    forward_meta_info = forward_meta_infos[proc_id]
+    backward_meta_info = backward_meta_infos[proc_id]
+    shard_tool = ShardTool(node_info, forward_meta_info, backward_meta_info)
 
     # emb_size = 3
     data = paddle.to_tensor(np.random.randn(node_info["node_eidx"] - node_info["node_sidx"] + 1, 3))
     data.stop_gradient = False
     gather_scatter = GatherScatter()
     y = gather_scatter.apply(data, shard_tool)
-
-    print("GPU: ", dist.get_rank())
-    print(y)
-
     y.mean().backward()
-    print(data.grad)
+
+    print("GPU: %d" % dist.get_rank(), data.grad.numpy())
 
 
 if __name__ == "__main__":
