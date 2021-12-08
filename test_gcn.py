@@ -314,7 +314,10 @@ def main(args):
         cal_val_acc.append(val_acc.numpy())
         cal_test_acc.append(test_acc.numpy())
 
-    print(dist.get_rank(), cal_test_acc[np.argmax(cal_val_acc)])
+    print("GPU: %d, Best test acc: %f" % (dist.get_rank(), cal_test_acc[np.argmax(cal_val_acc)]))
+    # best_test_acc = paddle.to_tensor(cal_test_acc[np.argmax(cal_val_acc)])
+    # dist.all_reduce(best_test_acc)
+    # log.info("GPU: %d, Average test acc: %f" % (dist.get_rank(), best_test_acc.numpy()))
 
 
 if __name__ == "__main__":
