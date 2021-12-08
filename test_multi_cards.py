@@ -41,14 +41,14 @@ def main():
     # Multi-cards examples
     node_infos = [{"node_sidx": i * 10, "node_eidx": (i + 1) * 10 - 1} for i in range(dist.get_world_size())]
     forward_meta_infos = [{} for i in range(dist.get_world_size())]
-    backward_meta_infos = [{} for i in range(dist.get_world_size())]
+    backward_meta_infos = [np.zeros(dist.get_world_size(), dtype="int32") for i in range(dist.get_world_size())]
     for i in range(dist.get_world_size()):
         for j in range(dist.get_world_size()):
             if j == i:
                 continue
             forward_meta_infos[i][j] = paddle.to_tensor(
                 np.unique(np.random.randint(node_infos[i]["node_sidx"], node_infos[i]["node_eidx"] + 1, size=8)))
-            backward_meta_infos[j][i] = len(forward_meta_infos[i][j]) 
+            backward_meta_infos[j][i] = len(forward_meta_infos[i][j])
     
     proc_id = dist.get_rank()
     node_info = node_infos[proc_id]

@@ -103,15 +103,15 @@ class ShardTool(object):
                 recv_output.append(paddle.to_tensor(np.array([0, ], dtype="int32"))) # 实际上并不需要，仅占位用
                 continue
             if i < dist.get_rank():
-                tensor_type = paddle.to_tensor([0], dtype="int32")
+                tensor_type = paddle.to_tensor(np.array([0], dtype="int32"))
                 dist.recv(tensor_type, src=i)
                 recv_output.append(tensor_type)
-                size = paddle.to_tensor(self.backward_meta_info[i], dtype="int32")
+                size = paddle.to_tensor(np.array(self.backward_meta_info[i], dtype="int32"))
                 dist.send(size, dst=i)
             else:
-                size = paddle.to_tensor(self.backward_meta_info[i], dtype="int32")
+                size = paddle.to_tensor(np.array(self.backward_meta_info[i], dtype="int32"))
                 dist.send(size, dst=i)
-                tensor_type = paddle.to_tensor([0], dtype="int32")
+                tensor_type = paddle.to_tensor(np.array([0, ], dtype="int32"))
                 dist.recv(tensor_type, src=i)
                 recv_output.append(tensor_type)
         return recv_output
