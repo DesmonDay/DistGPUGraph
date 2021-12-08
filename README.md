@@ -2,7 +2,7 @@
 
 ## Required
 
-NCCL >= 2.7
+NCCL >= 2.7.3
 
 ## Runs
 

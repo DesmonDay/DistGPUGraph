@@ -62,7 +62,9 @@ def normalize(feat):
     return feat / np.maximum(np.sum(feat, -1, keepdims=True), 1)
 
 
-def load(name="pubmed"):
+def load(name="cora"):
+    log.info("Begin to load %s dataset." % name)
+
     if name == "cora":
         dataset = pgl.dataset.CoraDataset()
     elif name == "pubmed":
@@ -71,20 +73,70 @@ def load(name="pubmed"):
         dataset = pgl.dataset.CitationDataset("citeseer", symmetry_edges=True)
     elif name == "reddit":
         dataset = pgl.dataset.RedditDataset()
-    elif name == "ogbn_arxiv":
+    elif name == "arxiv":
         dataset = pgl.dataset.OgbnArxivDataset()
     else:
         raise ValueError(name + " dataset doesn't exists")
-    indegree = dataset.graph.indegree()
-    feature = normalize(dataset.graph.node_feat["words"])
+
+    if name in ["cora", "pubmed", "citeseer"]:
+        feature = normalize(dataset.graph.node_feat["words"])
+    else:
+        feature = dataset.feature
+
+    if name == "reddit":
+        y = np.arange(0, dataset.graph.num_nodes)
+        y[dataset.train_index] = dataset.train_label
+        y[dataset.val_index] = dataset.val_label
+        y[dataset.test_index] = dataset.test_label
+        dataset.y = y
+
     # Information of dataset: graph, y, train_index, val_index, test_index
     return dataset, feature
 
 
+def shuffle_data(dataset, feature):
+    log.info("Begin to shuffle dataset.")
+    # Random shuffle data
+    np.random.seed(100)
+    permutation = np.arange(0, dataset.graph.num_nodes)
+    np.random.shuffle(permutation)
+    
+    edges = dataset.graph.edges
+    reindex = {}
+    for ind, node in enumerate(permutation):
+        reindex[node] = ind
+    new_edges = pgl.graph_kernel.map_edges(
+        np.arange(
+            len(edges), dtype="int64"), edges, reindex)
+    graph = pgl.Graph(edges=new_edges, num_nodes=dataset.graph.num_nodes)
+
+    # Shuffle dataset and feature.
+    dataset.graph = graph
+    feature = feature[permutation]
+    dataset.y = dataset.y[permutation]
+    
+    train_mask = np.zeros(dataset.graph.num_nodes, dtype=np.int64)
+    train_mask[dataset.train_index] = 1
+    train_mask = train_mask[permutation]
+    dataset.train_index = np.where(train_mask == 1)[0]
+
+    val_mask = np.zeros(dataset.graph.num_nodes, dtype=np.int64)
+    val_mask[dataset.val_index] = 1
+    val_mask = val_mask[permutation]
+    dataset.val_index = np.where(val_mask == 1)[0]
+
+    test_mask = np.zeros(dataset.graph.num_nodes, dtype=np.int64)
+    test_mask[dataset.test_index] = 1
+    test_mask = test_mask[permutation]
+    dataset.test_index = np.where(test_mask == 1)[0]
+   
+    return dataset, feature
+
+
 def dispatch_data(dataset, feature):
+    log.info("Begin to dispatch dataset.")
 
     # Get dataset
-    feature = dataset.graph.node_feat["words"]
     graph = dataset.graph
     y = dataset.y
     train_index = dataset.train_index
@@ -95,7 +147,7 @@ def dispatch_data(dataset, feature):
     num_procs = dist.get_world_size()
     proc_id = dist.get_rank()
 
-    # 目前先暂时均等分片.
+    # 目前先暂时均等分片
     split_nodes = np.array_split(np.arange(num_nodes), num_procs)
     cur_nodes = split_nodes[proc_id]
     
@@ -139,9 +191,10 @@ def dispatch_data(dataset, feature):
     shard_tool = ShardTool(node_info, forward_meta_info, backward_meta_info)
 
     # 划分训练集，测试集
-    
     dataset.feature = paddle.to_tensor(feature[cur_nodes], dtype="float32")
     dataset.y = y[cur_nodes]
+    if len(dataset.y.shape) == 2:
+        dataset.y = np.squeeze(dataset.y, -1)
 
     dataset.graph = new_graph
     dataset.graph.tensor()
@@ -217,11 +270,12 @@ def eval(node_index, node_label, shard_tool, model, graph, feature, criterion):
     return loss, acc 
 
 
-def main():
+def main(args):
     if dist.get_world_size() > 1:
         dist.init_parallel_env()
 
-    dataset, feature = load()
+    dataset, feature = load(name=args.dataset)
+    dataset, feature = shuffle_data(dataset, feature)
     dataset, shard_tool = dispatch_data(dataset, feature)
 
     feature = dataset.feature
@@ -247,12 +301,29 @@ def main():
         learning_rate=0.01,
         parameters=model.parameters())
 
-    for epoch in tqdm.tqdm(range(10)):
+    cal_val_acc = []
+    cal_test_acc = []
+
+    for epoch in tqdm.tqdm(range(args.epoch)):
         train_loss, train_acc = train(train_index, train_label, shard_tool,
                                       model, graph, feature, criterion, optim)
-        # val_loss, val_acc = eval(val_index, val_label, shard_tool, model,
-        #                          graph, feature, criterion)
+        val_loss, val_acc = eval(val_index, val_label, shard_tool, model,
+                                 graph, feature, criterion)
+        test_loss, test_acc = eval(test_index, test_label, shard_tool, model,
+                                   graph, feature, criterion)
+        cal_val_acc.append(val_acc.numpy())
+        cal_test_acc.append(test_acc.numpy())
+
+    print(dist.get_rank(), cal_test_acc[np.argmax(cal_val_acc)])
 
 
 if __name__ == "__main__":
-    dist.spawn(main, nprocs=-1) 
+    parser = argparse.ArgumentParser(
+        description='DistGPUGraph')
+    parser.add_argument(
+        "--dataset", type=str, default="cora", help="cora, pubmed, citeseer, reddit, arxiv")
+    parser.add_argument(
+        "--epoch", type=int, default=200, help="Epoch")
+    args = parser.parse_args()
+    dist.spawn(main, args=(args, ), nprocs=-1)
+
