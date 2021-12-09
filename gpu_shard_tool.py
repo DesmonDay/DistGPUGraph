@@ -60,11 +60,13 @@ class ShardTool(object):
         recv_grads = self.send_recv_grad(grad, recv_meta)
 
         backward_grad = grad[self.own_start_idx : self.own_end_idx]
-        # for i in range(dist.get_world_size()):
-        #     if i == dist.get_rank():
-        #         continue
-        #     backward_grad[self.forward_meta_info[i] - self.node_sidx] += recv_grads[i]
-        # return backward_grad * 1
+        """
+        for i in range(dist.get_world_size()):
+            if i == dist.get_rank():
+                continue
+            backward_grad[self.forward_meta_info[i] - self.node_sidx] += recv_grads[i]
+        return backward_grad * 1
+        """
         return backward_grad
 
     def send_recv_forward_index(self):
@@ -138,7 +140,7 @@ class ShardTool(object):
             if i < dist.get_rank():
                 tensor_type = paddle.zeros([recv_meta[i], grad.shape[1]],
                     dtype=grad.dtype)
-                tensor_type = dist.recv(tensor_type, src=i)
+                dist.recv(tensor_type, src=i)
                 recv_output.append(tensor_type)
                 grad_i = grad[self.split_idx[i][0] : self.split_idx[i][1]]
                 dist.send(grad_i, dst=i)
@@ -147,7 +149,7 @@ class ShardTool(object):
                 dist.send(grad_i, dst=i)
                 tensor_type = paddle.zeros([recv_meta[i], grad.shape[1]],
                     dtype=grad.dtype)
-                tensor_type = dist.recv(tensor_type, src=i)
+                dist.recv(tensor_type, src=i)
                 recv_output.append(tensor_type)
         return recv_output
                 
