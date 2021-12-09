@@ -14,7 +14,7 @@ from pgl.sampling.custom import subgraph
 from paddle.distributed.fleet.utils.hybrid_parallel_util import fused_allreduce_gradients
 
 from gpu_shard_tool import ShardTool
-from gather_scatter_layer import GatherScatter
+from gather_scatter_layer import GatherScatter, GatherScatterInplace
 
 
 class GCN(nn.Layer):
@@ -48,13 +48,13 @@ class GCN(nn.Layer):
         self.gcns.append(pgl.nn.GCNConv(self.hidden_size, self.num_class))
        
     def forward(self, graph, feature, shard_tool):
-        feature = self.gather_scatter.apply(feature, shard_tool)
         for m in self.gcns:
             if isinstance(m, nn.Dropout):
                 feature = m(feature)
             else:
+                feature = self.gather_scatter.apply(feature, shard_tool)
                 feature = m(graph, feature)
-        feature = feature[shard_tool.own_start_idx : shard_tool.own_end_idx]
+                feature = feature[shard_tool.own_start_idx : shard_tool.own_end_idx]
         return feature
 
 
@@ -302,10 +302,10 @@ def main(args):
         cal_val_acc.append(val_acc.numpy())
         cal_test_acc.append(test_acc.numpy())
 
-    best_test_acc = paddle.to_tensor(cal_test_acc[np.argmax(cal_val_acc)])
-    dist.all_reduce(best_test_acc)
-    best_test_acc /= dist.get_world_size()
-    log.info("GPU: %d, Average test acc: %f" % (dist.get_rank(), best_test_acc.numpy()))
+    print("GPU: %d, Best test acc: %f" % (dist.get_rank(), cal_test_acc[np.argmax(cal_val_acc)]))
+    # best_test_acc = paddle.to_tensor(cal_test_acc[np.argmax(cal_val_acc)])
+    # dist.all_reduce(best_test_acc)
+    # log.info("GPU: %d, Average test acc: %f" % (dist.get_rank(), best_test_acc.numpy()))
 
 
 if __name__ == "__main__":

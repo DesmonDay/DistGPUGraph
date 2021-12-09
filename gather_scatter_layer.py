@@ -18,3 +18,19 @@ class GatherScatter(PyLayer):
     def backward(ctx, dy):
         grad = ctx.shard_tool.backward_scatter(dy)
         return grad
+
+
+class GatherScatterInplace(PyLayer):
+    @staticmethod
+    def forward(ctx, x, shard_tool):
+        ctx.shard_tool = shard_tool
+        try:
+            y = shard_tool.forward_gather_inplace(x)
+        except Exception as e:
+            print("Hung", dist.get_rank())
+            raise e
+        return y
+
+    @staticmethod
+    def backward(ctx, dy):
+        return dy
