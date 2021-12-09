@@ -6,7 +6,7 @@ import paddle
 import paddle.distributed as dist
 
 from gpu_shard_tool import ShardTool
-from gather_scatter_layer import GatherScatter, GatherScatterInplace
+from gather_scatter_layer import GatherScatter
 
 
 """
@@ -65,40 +65,5 @@ def main():
     print("GPU: %d" % dist.get_rank(), data.grad.numpy())
 
 
-def main_inplace():
-    if dist.get_world_size() > 1:
-        dist.init_parallel_env()
-
-    np.random.seed(5)
-
-    # Multi-cards examples
-    node_infos = [{"node_sidx": i * 10, "node_eidx": (i + 1) * 10 - 1} for i in range(dist.get_world_size())]
-    forward_meta_infos = [{} for i in range(dist.get_world_size())]
-    backward_meta_infos = [np.zeros(dist.get_world_size(), dtype="int32") for i in range(dist.get_world_size())]
-    for i in range(dist.get_world_size()):
-        for j in range(dist.get_world_size()):
-            if j == i:
-                continue
-            forward_meta_infos[i][j] = paddle.to_tensor(
-                np.unique(np.random.randint(node_infos[i]["node_sidx"], node_infos[i]["node_eidx"] + 1, size=8)))
-            backward_meta_infos[j][i] = len(forward_meta_infos[i][j])
-
-    proc_id = dist.get_rank()
-    node_info = node_infos[proc_id]
-    forward_meta_info = forward_meta_infos[proc_id]
-    print("GPU: %d" % dist.get_rank(), forward_meta_info)
-    backward_meta_info = backward_meta_infos[proc_id]
-    shard_tool = ShardTool(node_info, forward_meta_info, backward_meta_info)
-
-    np.random.seed(dist.get_rank())
-    cur_node_num = node_info["node_eidx"] - node_info["node_sidx"] + 1
-    data = paddle.to_tensor(np.random.randn(np.sum(backward_meta_info) + cur_node_num, 3))
-    gather_scatter_inplace = GatherScatterInplace()
-    y = gather_scatter_inplace.apply(data, shard_tool)
-
-    print("GPU: %d" % dist.get_rank(), y)
-
-
 if __name__ == "__main__":
-    # dist.spawn(main, nprocs=-1)
-    dist.spawn(main_inplace, nprocs=-1)
+    dist.spawn(main, nprocs=-1)
