@@ -31,8 +31,6 @@ forward时只需要把recv到的emb按顺序concat起来，因此不需要考虑
 
 def main():
 
-    # run: CUDA_VISIBLE_DEVICES=0,1 python test.py
-
     if dist.get_world_size() > 1:
         dist.init_parallel_env()
     
@@ -41,14 +39,14 @@ def main():
     # Multi-cards examples
     node_infos = [{"node_sidx": i * 10, "node_eidx": (i + 1) * 10 - 1} for i in range(dist.get_world_size())]
     forward_meta_infos = [{} for i in range(dist.get_world_size())]
-    backward_meta_infos = [{} for i in range(dist.get_world_size())]
+    backward_meta_infos = [np.zeros(dist.get_world_size(), dtype="int32") for i in range(dist.get_world_size())]
     for i in range(dist.get_world_size()):
         for j in range(dist.get_world_size()):
             if j == i:
                 continue
             forward_meta_infos[i][j] = paddle.to_tensor(
                 np.unique(np.random.randint(node_infos[i]["node_sidx"], node_infos[i]["node_eidx"] + 1, size=8)))
-            backward_meta_infos[j][i] = len(forward_meta_infos[i][j]) 
+            backward_meta_infos[j][i] = len(forward_meta_infos[i][j])
     
     proc_id = dist.get_rank()
     node_info = node_infos[proc_id]
@@ -57,6 +55,7 @@ def main():
     shard_tool = ShardTool(node_info, forward_meta_info, backward_meta_info)
 
     # emb_size = 3
+    np.random.seed(dist.get_rank())
     data = paddle.to_tensor(np.random.randn(node_info["node_eidx"] - node_info["node_sidx"] + 1, 3))
     data.stop_gradient = False
     gather_scatter = GatherScatter()
