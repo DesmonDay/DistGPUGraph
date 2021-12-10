@@ -302,6 +302,7 @@ def main(args):
         cal_val_acc.append(val_acc.numpy())
         cal_test_acc.append(test_acc.numpy())
 
+    best_test_acc = paddle.to_tensor(cal_test_acc[np.argmax(cal_val_acc)])
     best_correct_num = best_test_acc * test_index.shape[0]
     total_test_num = paddle.to_tensor(test_index.shape[0])
     dist.all_reduce(best_correct_num)
