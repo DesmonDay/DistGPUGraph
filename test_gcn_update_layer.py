@@ -254,7 +254,7 @@ def eval(node_index, node_label, shard_tool, model, graph, feature, criterion):
         pred = paddle.gather(pred, node_index)
         loss = criterion(pred, node_label)
     acc = paddle.metric.accuracy(input=pred, label=node_label, k=1)
-    return loss, acc 
+    return loss, acc
 
 
 def main(args):
@@ -303,9 +303,12 @@ def main(args):
         cal_test_acc.append(test_acc.numpy())
 
     best_test_acc = paddle.to_tensor(cal_test_acc[np.argmax(cal_val_acc)])
-    dist.all_reduce(best_test_acc)
-    best_test_acc /= dist.get_world_size()
-    log.info("GPU: %d, Average test acc: %f" % (dist.get_rank(), best_test_acc.numpy()))
+    best_correct_num = best_test_acc * test_index.shape[0]
+    total_test_num = paddle.to_tensor(test_index.shape[0])
+    dist.all_reduce(best_correct_num)
+    dist.all_reduce(total_test_num)
+    average_test_acc = best_correct_num / total_test_num
+    log.info("GPU: %d, Average test acc: %f" % (dist.get_rank(), average_test_acc.numpy()))
 
 
 if __name__ == "__main__":

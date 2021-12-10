@@ -58,16 +58,15 @@ class ShardTool(object):
     def backward_scatter(self, grad):
         recv_meta = self.send_recv_backward_index()
         recv_grads = self.send_recv_grad(grad, recv_meta)
-
+        recv_grads = paddle.concat(recv_grads, 0)
         backward_grad = grad[self.own_start_idx : self.own_end_idx]
-        """
-        for i in range(dist.get_world_size()):
-            if i == dist.get_rank():
-                continue
-            backward_grad[self.forward_meta_info[i] - self.node_sidx] += recv_grads[i]
-        return backward_grad * 1
-        """
-        return backward_grad
+        init_backward_grad = paddle.zeros_like(backward_grad)
+        forward_meta_infos = [self.forward_meta_info[i] - self.node_sidx 
+                              for i in range(dist.get_world_size()) if i != dist.get_rank()]
+        forward_meta_infos = paddle.concat(forward_meta_infos, 0)
+        acc_backward_grad = paddle.scatter(init_backward_grad, forward_meta_infos,
+                                     recv_grads, overwrite=False)
+        return backward_grad + acc_backward_grad
 
     def send_recv_forward_index(self):
         recv_output = []
@@ -141,7 +140,6 @@ class ShardTool(object):
         recv_output = []
         for i in range(dist.get_world_size()):
             if i == dist.get_rank():
-                recv_output.append(paddle.zeros([1], dtype="int32")) # 占位
                 continue
             if i < dist.get_rank():
                 tensor_type = paddle.zeros([recv_meta[i], grad.shape[1]],
