@@ -18,6 +18,7 @@ from gat_conv import GATConv
 from gpu_shard_tool import ShardTool
 from gather_scatter_layer import GatherScatter
 
+
 class GAT(nn.Layer):
     """Implement of GAT
     """
@@ -74,7 +75,6 @@ class GAT(nn.Layer):
         for m in self.gats:
             feature = m(graph, feature, self.gather_scatter, shard_tool)
         return feature
-
 
 
 def load_data(load_path, proc_id):
