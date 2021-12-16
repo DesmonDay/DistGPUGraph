@@ -8,6 +8,7 @@ import numpy as np
 import pgl
 import paddle
 import paddle.nn as nn
+
 from pgl.utils.logger import log
 from paddle.optimizer import Adam
 import paddle.distributed as dist
@@ -16,7 +17,81 @@ from paddle.distributed.fleet.utils.hybrid_parallel_util import fused_allreduce_
 
 from gpu_shard_tool import ShardTool
 from gather_scatter_layer import GatherScatter
-from new_conv import GATConv
+from new_conv import GATConv, TransformerConv
+
+
+class UniMP(nn.Layer):
+    """Implement of TransformerConv
+    """
+
+    def __init__(self,
+                 input_size,
+                 num_class,
+                 num_layers=2,
+                 feat_drop=0.3,
+                 attn_drop=0.00,
+                 num_heads=2,
+                 hidden_size=8,
+                 **kwargs):
+        super(UniMP, self).__init__()
+        self.num_class = num_class
+        self.num_layers = num_layers
+        self.feat_drop = feat_drop
+        self.attn_drop = attn_drop
+        self.num_heads = num_heads
+        self.hidden_size = hidden_size
+        self.preprocess = nn.LayerNorm(input_size)
+        self.trans = nn.LayerList()
+        self.dropout = nn.Dropout(p=feat_drop)
+        self.gather_scatter = GatherScatter()
+
+        for i in range(self.num_layers):
+            if i == 0:
+                self.trans.append(
+                    TransformerConv(
+                        input_size,
+                        self.hidden_size,
+                        self.num_heads,
+                        feat_drop=0,
+                        attn_drop=0,
+                        concat=True,
+                        layer_norm=True,
+                        gate=True,
+                        activation="relu",
+                        skip_feat=True))
+            else:
+                self.trans.append(
+                    TransformerConv(
+                        self.num_heads * self.hidden_size,
+                        self.hidden_size,
+                        self.num_heads,
+                        feat_drop=0,
+                        attn_drop=0,
+                        concat=True,
+                        layer_norm=True,
+                        gate=True,
+                        activation="relu",
+                        skip_feat=True))
+
+        self.out_lin = TransformerConv(
+                self.num_heads * self.hidden_size,
+                self.num_class,
+                self.num_heads,
+                feat_drop=0,
+                attn_drop=0,
+                concat=False,
+                gate=False,
+                skip_feat=True)
+
+
+    def forward(self, graph, feature, shard_tool):
+        for n, m in enumerate(self.trans):
+            feature = self.dropout(feature)
+            feature = m(graph, feature, self.gather_scatter, shard_tool)
+
+        feature = self.dropout(feature)
+        feature = self.out_lin(graph, feature, self.gather_scatter, shard_tool)
+        return feature
 
 
 class GAT(nn.Layer):
@@ -112,13 +187,12 @@ def train(node_index, node_label, loss_scale, shard_tool, model, graph, feature,
         pred = paddle.gather(pred, node_index)
         loss = criterion(pred, node_label)
         loss = loss * loss_scale
-        # loss = loss / 所有卡的训练样本数.
         loss.backward()
    
     fused_allreduce_gradients(list(model.parameters()), None) 
     optim.step()
     optim.clear_grad()
-    return loss
+    return loss 
 
 
 @paddle.no_grad()
@@ -129,6 +203,7 @@ def eval(node_index, node_label, shard_tool, model, graph, feature, criterion):
         pred = model(graph, feature, shard_tool)
         pred = paddle.gather(pred, node_index)
         loss = criterion(pred, node_label)
+         
 
     correct_num = paddle.sum(paddle.cast(paddle.argmax(pred, -1, keepdim=True) == node_label, dtype="float32"))
     total_num = paddle.sum(paddle.ones_like(node_label, dtype="float32"))
@@ -154,17 +229,17 @@ def main(args):
     model = GAT(input_size=feature.shape[1],
                 num_class=num_classes,
                 num_layers=args.num_layers,
-                feat_drop=0.6,
-                attn_drop=0.6,
-                num_heads=8,
+                feat_drop=0.3,
+                attn_drop=0.0,
+                num_heads=2,
                 hidden_size=args.hidden_size)
 
     if dist.get_world_size() > 1:
         model = paddle.DataParallel(model) 
 
-    criterion = paddle.nn.loss.CrossEntropyLoss(reduction='sum')
+    criterion = paddle.nn.loss.CrossEntropyLoss(reduction='none')
     optim = Adam(
-        learning_rate=0.01,
+        learning_rate=0.001,
         parameters=model.parameters())
 
     cal_val_acc = []
@@ -183,6 +258,11 @@ def main(args):
         cal_val_acc.append(val_acc.numpy())
         cal_test_acc.append(test_acc.numpy())
 
+        best_test_acc = cal_test_acc[np.argmax(cal_val_acc)]
+
+        if dist.get_rank() == 0:
+            log.info("Epoch: %d, Test acc: %f" % (epoch, best_test_acc ))
+
     best_test_acc = cal_test_acc[np.argmax(cal_val_acc)]
     log.info("GPU: %d, Test acc: %f" % (dist.get_rank(), best_test_acc))
 
@@ -199,7 +279,7 @@ if __name__ == "__main__":
 
     # Model
     parser.add_argument(
-        "--hidden_size", type=int, default=48)
+        "--hidden_size", type=int, default=128)
     parser.add_argument(
         "--num_layers", type=int, default=2)
 

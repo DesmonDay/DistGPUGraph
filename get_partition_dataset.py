@@ -7,8 +7,11 @@ import argparse
 import numpy as np
 import pgl
 from pgl.utils.logger import log
+from pgl.utils.transform import to_undirected
 from pgl.sampling.custom import subgraph
 from pgl.partition import metis_partition, random_partition
+
+from gcn_norm import compute_gcn_norm 
 
 
 def normalize(feat):
@@ -42,6 +45,9 @@ def load(name="cora"):
         y[dataset.test_index] = dataset.test_label
         dataset.y = y
 
+    if name == "arxiv":
+        dataset.graph = to_undirected(dataset.graph)
+
     # Information of dataset: graph, y, train_index, val_index, test_index
     return dataset, feature
 
@@ -57,7 +63,9 @@ def get_permutation(dataset, num_procs, mode="random"):
         for i in range(num_procs):
             part[i + 1] = part[i] + len(np.where(random_part == i)[0])
     elif mode == "metis":
-        metis_part = metis_partition(dataset.graph, num_procs)
+        # metis_part = metis_partition(dataset.graph, num_procs)
+        indegrees = dataset.graph.indegree()
+        metis_part = metis_partition(dataset.graph, num_procs, node_weights=indegrees) 
         permutation = np.argsort(metis_part)
         part = np.zeros(num_procs + 1, dtype=np.int64)
         for i in range(num_procs):
@@ -97,10 +105,12 @@ def reindex_data(permutation, dataset, feature):
     test_mask = test_mask[permutation]
     dataset.test_index = np.where(test_mask == 1)[0]
 
-    return dataset, feature
+    gcn_norm = compute_gcn_norm(graph, True)
+
+    return dataset, feature, gcn_norm
 
 
-def dispatch_data(args, part, dataset, feature, num_procs):
+def dispatch_data(args, part, dataset, feature, gcn_norm, num_procs):
     log.info("Begin to dispatch data.")
 
     # Get dataset
@@ -124,6 +134,8 @@ def dispatch_data(args, part, dataset, feature, num_procs):
         np.save(save_path + "/cur_nodes.npy", cur_nodes)  # Save
         feat = feature[cur_nodes]
         np.save(save_path + "/feature.npy", feat)  # Save
+        sub_gcn_norm = gcn_norm[cur_nodes]
+        np.save(save_path + "/gcn_norm.npy", sub_gcn_norm) # Save
           
         # Get forward_meta_info
         succ_nodes = np.concatenate(dataset.graph.successor(nodes=cur_nodes), -1)
@@ -162,6 +174,8 @@ def dispatch_data(args, part, dataset, feature, num_procs):
         pred_eids = np.concatenate(pred_eids, -1)
         new_graph = subgraph(dataset.graph, nodes=new_graph_nodes, eid=pred_eids,
                          with_node_feat=False)
+
+        print(new_graph)
         new_graph.adj_dst_index
         new_graph.dump(save_path)  # Save
         
@@ -202,9 +216,8 @@ def main(args):
         os.mkdir("./%s_data" % args.dataset)
     dataset, feature = load(name=args.dataset)
     permutation, part = get_permutation(dataset, args.num_procs, args.mode)
-    dataset, feature = reindex_data(permutation, dataset, feature)
-
-    dispatch_data(args, part, dataset, feature, args.num_procs)
+    dataset, feature, gcn_norm = reindex_data(permutation, dataset, feature)
+    dispatch_data(args, part, dataset, feature, gcn_norm, args.num_procs)
 
  
 if __name__ == "__main__":

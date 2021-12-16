@@ -16,6 +16,7 @@ from paddle.distributed.fleet.utils.hybrid_parallel_util import fused_allreduce_
 
 from gpu_shard_tool import ShardTool
 from gather_scatter_layer import GatherScatter
+from new_conv import GCNConv
 
 
 class GCN(nn.Layer):
@@ -33,29 +34,29 @@ class GCN(nn.Layer):
         for i in range(self.num_layers):
             if i == 0:
                 self.gcns.append(
-                    pgl.nn.GCNConv(
+                    GCNConv(
                         input_size,
                         self.hidden_size,
                         activation="relu",
                         norm=True))
             else:
                 self.gcns.append(
-                    pgl.nn.GCNConv(
+                    GCNConv(
                         self.hidden_size,
                         self.hidden_size,
                         activation="relu",
                         norm=True))
             self.gcns.append(nn.Dropout(self.dropout))
-        self.gcns.append(pgl.nn.GCNConv(self.hidden_size, self.num_class))
+        self.gcns.append(GCNConv(self.hidden_size, self.num_class))
        
-    def forward(self, graph, feature, shard_tool):
+    def forward(self, graph, feature, norm, shard_tool):
         for m in self.gcns:
             if isinstance(m, nn.Dropout):
                 feature = m(feature)
             else:
-                feature = self.gather_scatter.apply(feature, shard_tool)
-                feature = m(graph, feature)
-                feature = feature[shard_tool.own_start_idx : shard_tool.own_end_idx]
+                # feature = self.gather_scatter.apply(feature, shard_tool)
+                feature = m(graph, feature, self.gather_scatter, shard_tool, norm)
+                # feature = feature[shard_tool.own_start_idx : shard_tool.own_end_idx]
         return feature
 
 
@@ -71,7 +72,8 @@ def load_data(load_path, proc_id):
     graph = pgl.Graph.load(load_path, mmap_mode=None)
     graph.tensor()
     feature = paddle.to_tensor(np.load(load_path + "/feature.npy"), dtype="float32")
-    
+    gcn_norm = paddle.to_tensor(np.load(load_path + "/gcn_norm.npy"), dtype="float32")   
+ 
     train_index = paddle.to_tensor(np.load(load_path + "/train_index.npy"))
     train_label = paddle.to_tensor(np.load(load_path + "/train_label.npy"))
     val_index = paddle.to_tensor(np.load(load_path + "/val_index.npy"))
@@ -82,15 +84,15 @@ def load_data(load_path, proc_id):
     shard_tool = ShardTool(node_info, forward_meta_info, backward_meta_info)
 
     num_classes = np.load(load_path + "/num_classes.npy")
-    return graph, feature, shard_tool, num_classes, train_index, train_label, \
+    return graph, feature, gcn_norm, shard_tool, num_classes, train_index, train_label, \
            val_index, val_label, test_index, test_label 
 
 
-def train(node_index, node_label, loss_scale, shard_tool, model, graph, feature, criterion, optim):
+def train(node_index, node_label, loss_scale, shard_tool, model, graph, feature, gcn_norm, criterion, optim):
     model.train()
 
     with model.no_sync():
-        pred = model(graph, feature, shard_tool)
+        pred = model(graph, feature, gcn_norm, shard_tool)
         pred = paddle.gather(pred, node_index)
         loss = criterion(pred, node_label)
         loss = loss * loss_scale
@@ -104,11 +106,11 @@ def train(node_index, node_label, loss_scale, shard_tool, model, graph, feature,
 
 
 @paddle.no_grad()
-def eval(node_index, node_label, shard_tool, model, graph, feature, criterion):
+def eval(node_index, node_label, shard_tool, model, graph, feature, gcn_norm, criterion):
     model.eval()
 
     with model.no_sync():
-        pred = model(graph, feature, shard_tool)
+        pred = model(graph, feature, gcn_norm, shard_tool)
         pred = paddle.gather(pred, node_index)
         loss = criterion(pred, node_label)
 
@@ -128,7 +130,7 @@ def main(args):
 
     load_path = "%s_data/save_%d_split_data_%s" % (args.dataset, dist.get_world_size(),
                                                    args.mode)
-    graph, feature, shard_tool, num_classes, train_index, train_label, \
+    graph, feature, gcn_norm, shard_tool, num_classes, train_index, train_label, \
         val_index, val_label, test_index, test_label = load_data(load_path, dist.get_rank())
     print(graph)
 
@@ -153,11 +155,11 @@ def main(args):
 
     for epoch in tqdm.tqdm(range(args.epoch)):
         train_loss = train(train_index, train_label, loss_scale, shard_tool,
-                                      model, graph, feature, criterion, optim)
+                           model, graph, feature, gcn_norm, criterion, optim)
         val_loss, val_acc = eval(val_index, val_label, shard_tool, model,
-                                 graph, feature, criterion)
+                                 graph, feature, gcn_norm, criterion)
         test_loss, test_acc = eval(test_index, test_label, shard_tool, model,
-                                   graph, feature, criterion)
+                                   graph, feature, gcn_norm, criterion)
         cal_val_acc.append(val_acc.numpy())
         cal_test_acc.append(test_acc.numpy())
 
