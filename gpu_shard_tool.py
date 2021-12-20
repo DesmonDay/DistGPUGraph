@@ -2,6 +2,7 @@ import numpy as np
 import paddle
 import paddle.nn as nn
 import paddle.distributed as dist
+import time
 
 
 """
@@ -66,9 +67,10 @@ class ShardTool(object):
         forward_meta_infos = paddle.concat(forward_meta_infos, 0)
         acc_backward_grad = paddle.scatter(init_backward_grad, forward_meta_infos,
                                      recv_grads, overwrite=False)
+
         return backward_grad + acc_backward_grad
 
-    def send_recv_forward_index(self):
+    def send_recv_forward_index_v1(self):
         recv_output = []
         for i in range(dist.get_world_size()):
             if i == dist.get_rank():
@@ -90,7 +92,20 @@ class ShardTool(object):
                 dist.wait(tensor_type)
         return recv_output
 
-    def send_recv_emb(self, shard_node_emb, recv_meta):
+    def send_recv_forward_index(self):
+        recv_output = []
+        send_output = []
+        for i in range(dist.get_world_size()):
+            if i == dist.get_rank():
+                size = paddle.zeros([1], dtype="int32")
+                send_output.append(size)
+            else:
+                size = paddle.to_tensor(np.array([self.forward_meta_info[i].shape[0]], dtype="int32"))
+                send_output.append(size)
+        dist.alltoall(send_output, recv_output)
+        return recv_output
+
+    def send_recv_emb_v1(self, shard_node_emb, recv_meta):
         recv_output = []
         for i in range(dist.get_world_size()):
             if i == dist.get_rank():
@@ -114,7 +129,33 @@ class ShardTool(object):
                 dist.wait(tensor_type)
         return recv_output
 
-    def send_recv_backward_index(self):
+    def send_recv_emb(self, shard_node_emb, recv_meta):
+        recv_output = []
+        send_output = []
+        for i in range(dist.get_world_size()):
+            if i == dist.get_rank():
+                send_output.append(None)
+                recv_output.append(shard_node_emb)
+            else:
+                emb = paddle.gather(shard_node_emb, self.forward_meta_info[i] - self.node_sidx)
+                send_output.append(emb)
+                tensor_type = paddle.zeros([recv_meta[i], shard_node_emb.shape[1]],
+                    dtype=shard_node_emb.dtype)
+                recv_output.append(tensor_type)
+
+
+        for i in range(dist.get_world_size()):
+            if i == dist.get_rank():
+                continue
+            if i < dist.get_rank():
+                dist.recv(recv_output[i], src=i)
+                dist.send(send_output[i], dst=i)
+            else:
+                dist.send(send_output[i], dst=i)
+                dist.recv(recv_output[i], src=i)
+        return recv_output
+
+    def send_recv_backward_index_v1(self):
         recv_output = []
         for i in range(dist.get_world_size()):
             if i == dist.get_rank():
@@ -136,26 +177,40 @@ class ShardTool(object):
                 dist.wait(tensor_type)
         return recv_output
 
+    def send_recv_backward_index(self):
+        recv_output = []
+        send_output = []
+        for i in range(dist.get_world_size()):
+            if i == dist.get_rank():
+                send_output.append(paddle.zeros([1], dtype="int32")) # 占位
+                continue
+            else:
+                size = paddle.to_tensor(np.array([self.backward_meta_info[i]], dtype="int32"))
+                send_output.append(size)
+        dist.alltoall(send_output, recv_output)
+        return recv_output
+
+
     def send_recv_grad(self, grad, recv_meta):
         recv_output = []
+        send_output = []
+        for i in range(dist.get_world_size()):
+            if i == dist.get_rank():
+                continue
+            tensor_type = paddle.zeros([recv_meta[i], grad.shape[1]],
+                dtype=grad.dtype)
+            recv_output.append(tensor_type)
+            grad_i = grad[self.split_idx[i][0] : self.split_idx[i][1]]
+            send_output.append(grad_i)
+
         for i in range(dist.get_world_size()):
             if i == dist.get_rank():
                 continue
             if i < dist.get_rank():
-                tensor_type = paddle.zeros([recv_meta[i], grad.shape[1]],
-                    dtype=grad.dtype)
-                dist.recv(tensor_type, src=i)
-                recv_output.append(tensor_type)
-                dist.wait(tensor_type)
-                grad_i = grad[self.split_idx[i][0] : self.split_idx[i][1]]
-                dist.send(grad_i, dst=i)
+                dist.recv(recv_output[i], src=i)
+                dist.send(send_output[i], dst=i)
             else:
-                grad_i = grad[self.split_idx[i][0] : self.split_idx[i][1]]
-                dist.send(grad_i, dst=i)
-                tensor_type = paddle.zeros([recv_meta[i], grad.shape[1]],
-                    dtype=grad.dtype)
-                dist.recv(tensor_type, src=i)
-                recv_output.append(tensor_type)
-                dist.wait(tensor_type)
+                dist.send(send_output[i - 1], dst=i)
+                dist.recv(recv_output[i - 1], src=i)
         return recv_output
                 

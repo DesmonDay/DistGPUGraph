@@ -63,9 +63,16 @@ def get_permutation(dataset, num_procs, mode="random"):
         for i in range(num_procs):
             part[i + 1] = part[i] + len(np.where(random_part == i)[0])
     elif mode == "metis":
+        metis_part = metis_partition(dataset.graph, num_procs)
+        permutation = np.argsort(metis_part)
+        part = np.zeros(num_procs + 1, dtype=np.int64)
+        for i in range(num_procs):
+            part[i + 1] = part[i] + len(np.where(metis_part == i)[0])
+    elif mode == "metis_w":
         # metis_part = metis_partition(dataset.graph, num_procs)
-        indegrees = dataset.graph.indegree()
-        metis_part = metis_partition(dataset.graph, num_procs, node_weights=indegrees) 
+        indeg = dataset.graph.indegree()
+        outdeg = dataset.graph.outdegree()
+        metis_part = metis_partition(dataset.graph, num_procs, node_weights=indeg+outdeg) 
         permutation = np.argsort(metis_part)
         part = np.zeros(num_procs + 1, dtype=np.int64)
         for i in range(num_procs):
