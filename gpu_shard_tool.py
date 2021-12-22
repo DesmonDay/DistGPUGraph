@@ -70,28 +70,6 @@ class ShardTool(object):
 
         return backward_grad + acc_backward_grad
 
-    def send_recv_forward_index_v1(self):
-        recv_output = []
-        for i in range(dist.get_world_size()):
-            if i == dist.get_rank():
-                recv_output.append(paddle.zeros([1], dtype="int32")) # 占位
-                continue
-            if i < dist.get_rank():
-                tensor_type = paddle.zeros([1], dtype="int32")
-                dist.recv(tensor_type, src=i)
-                recv_output.append(tensor_type)
-                dist.wait(tensor_type)
-                size = paddle.to_tensor(np.array([self.forward_meta_info[i].shape[0]], dtype="int32"))
-                dist.send(size, dst=i)
-            else:
-                size = paddle.to_tensor(np.array([self.forward_meta_info[i].shape[0]], dtype="int32"))
-                dist.send(size, dst=i)
-                tensor_type = paddle.zeros([1], dtype="int32")
-                dist.recv(tensor_type, src=i)
-                recv_output.append(tensor_type)
-                dist.wait(tensor_type)
-        return recv_output
-
     def send_recv_forward_index(self):
         recv_output = []
         send_output = []
@@ -103,30 +81,6 @@ class ShardTool(object):
                 size = paddle.to_tensor(np.array([self.forward_meta_info[i].shape[0]], dtype="int32"))
                 send_output.append(size)
         dist.alltoall(send_output, recv_output)
-        return recv_output
-
-    def send_recv_emb_v1(self, shard_node_emb, recv_meta):
-        recv_output = []
-        for i in range(dist.get_world_size()):
-            if i == dist.get_rank():
-                recv_output.append(shard_node_emb)
-                continue
-            if i < dist.get_rank():
-                tensor_type = paddle.zeros([recv_meta[i], shard_node_emb.shape[1]],
-                    dtype=shard_node_emb.dtype)
-                dist.recv(tensor_type, src=i)
-                recv_output.append(tensor_type)
-                dist.wait(tensor_type)
-                emb = paddle.gather(shard_node_emb, self.forward_meta_info[i] - self.node_sidx)
-                dist.send(emb, dst=i)
-            else:
-                emb = paddle.gather(shard_node_emb, self.forward_meta_info[i] - self.node_sidx)
-                dist.send(emb, dst=i)
-                tensor_type = paddle.zeros([recv_meta[i], shard_node_emb.shape[1]],
-                    dtype=shard_node_emb.dtype)
-                dist.recv(tensor_type, src=i)
-                recv_output.append(tensor_type)
-                dist.wait(tensor_type)
         return recv_output
 
     def send_recv_emb(self, shard_node_emb, recv_meta):
@@ -143,7 +97,6 @@ class ShardTool(object):
                     dtype=shard_node_emb.dtype)
                 recv_output.append(tensor_type)
 
-
         for i in range(dist.get_world_size()):
             if i == dist.get_rank():
                 continue
@@ -153,28 +106,6 @@ class ShardTool(object):
             else:
                 dist.send(send_output[i], dst=i)
                 dist.recv(recv_output[i], src=i)
-        return recv_output
-
-    def send_recv_backward_index_v1(self):
-        recv_output = []
-        for i in range(dist.get_world_size()):
-            if i == dist.get_rank():
-                recv_output.append(paddle.zeros([1], dtype="int32")) # 占位
-                continue
-            if i < dist.get_rank():
-                tensor_type = paddle.zeros([1], dtype="int32")
-                dist.recv(tensor_type, src=i)
-                recv_output.append(tensor_type)
-                dist.wait(tensor_type)
-                size = paddle.to_tensor(np.array(self.backward_meta_info[i], dtype="int32"))
-                dist.send(size, dst=i)
-            else:
-                size = paddle.to_tensor(np.array(self.backward_meta_info[i], dtype="int32"))
-                dist.send(size, dst=i)
-                tensor_type = paddle.zeros([1], dtype="int32")
-                dist.recv(tensor_type, src=i)
-                recv_output.append(tensor_type)
-                dist.wait(tensor_type)
         return recv_output
 
     def send_recv_backward_index(self):
@@ -189,7 +120,6 @@ class ShardTool(object):
                 send_output.append(size)
         dist.alltoall(send_output, recv_output)
         return recv_output
-
 
     def send_recv_grad(self, grad, recv_meta):
         recv_output = []
